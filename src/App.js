@@ -15,7 +15,7 @@ const App = () => {
     // Replace this URL with the actual API you want to call
     axios
       .get(
-        "ec2-54-66-146-109.ap-southeast-2.compute.amazonaws.com:4000/get-ocr"
+        "http://ec2-54-66-146-109.ap-southeast-2.compute.amazonaws.com:4000/get-ocr"
       )
       .then((response) => {
         setApiResponse(JSON.stringify(response.data, null, 2));
