@@ -7,7 +7,7 @@ const App = () => {
   const [apiResponse, setApiResponse] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
+  console.log("hostname", window.location.hostname);
   const callApi = () => {
     setLoading(true);
     setError("");
