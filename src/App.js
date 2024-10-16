@@ -46,7 +46,7 @@ const App = () => {
 
     try {
       const response = await axios.post(
-        "ec2-54-66-146-109.ap-southeast-2.compute.amazonaws.com:4000/upload",
+        "http://ec2-54-66-146-109.ap-southeast-2.compute.amazonaws.com:4000/upload",
         formData,
         {
           headers: {
