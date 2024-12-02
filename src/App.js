@@ -98,6 +98,7 @@ const App = () => {
               <option value="thai_fund">กองทุนไทย </option>
               <option value="thai_stock">หุ้นไทย </option>
               <option value="inter_stock">หุ้นต่างประเทศ</option>
+              <option value="inter_fund">กองทุนต่างประเทศ</option>
             </select>
           </div>
           <button type="submit" style={styles.button}>
