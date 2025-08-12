@@ -17,7 +17,7 @@ const App = () => {
     }
   };
 
-  // Handle text label change
+  // Handle text label changes
   const handleLabelChange = (e) => {
     setLabel(e.target.value);
   };
