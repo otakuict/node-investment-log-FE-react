@@ -2,106 +2,104 @@ name: Deploy to EC2
 
 on:
   push:
-    branches: [nginx-config]
+    branches: [ nginx-config ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # Build / ship your app here (docker pull/run, rsync, etc.)
+      # You can add build / docker push / file upload steps here before Nginx config
 
       - name: Repair APT, install & configure Nginx (safe write, idempotent)
-  uses: appleboy/ssh-action@v1.2.0
-  env:
-    SERVER_NAME: ${{ secrets.SERVER_NAME }}       # example.com or "_" to skip TLS
-    APP_PORT: ${{ secrets.APP_PORT }}             # host port Nginx should proxy to (e.g. 3001 if 0.0.0.0:3001->3000)
-    CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}   # email for Let's Encrypt (optional)
-    SITE_NAME: app                                # change if you like
-  with:
-    host: ${{ secrets.EC2_HOST }}
-    username: ${{ secrets.EC2_USER }}             # ubuntu / ec2-user / etc.
-    key: ${{ secrets.EC2_SSH_KEY }}
-    script_stop: true
-    script: |
-      set -euo pipefail
-      export DEBIAN_FRONTEND=noninteractive
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          SERVER_NAME: ${{ secrets.SERVER_NAME }}       # example.com or "_" to skip TLS
+          APP_PORT: ${{ secrets.APP_PORT }}             # host port Nginx should proxy to (e.g., 3001 if 0.0.0.0:3001->3000)
+          CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}   # email for Let's Encrypt (optional)
+          SITE_NAME: app                                # change if you like
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}             # ubuntu / ec2-user / etc.
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            export DEBIAN_FRONTEND=noninteractive
 
-      DOMAIN="${SERVER_NAME:-_}"
-      PORT="${APP_PORT:-3000}"
-      SITE_NAME="${SITE_NAME:-app}"
+            DOMAIN="${SERVER_NAME:-_}"
+            PORT="${APP_PORT:-3000}"
+            SITE_NAME="${SITE_NAME:-app}"
 
-      # --- APT health ---
-      sudo apt-get update -y
-      sudo dpkg --configure -a || true
-      sudo apt-get -y -f install || true
-      sudo apt-get -y --fix-broken install || true
-      # Harmless try: finish any stuck aws kernel pkgs (if not present, no-op)
-      sudo apt-get install -y linux-aws-headers-6.8.0-1029 linux-aws-tools-6.8.0-1029 || true
-      sudo apt-get -y --fix-broken install || true
+            # --- APT health ---
+            sudo apt-get update -y
+            sudo dpkg --configure -a || true
+            sudo apt-get -y -f install || true
+            sudo apt-get -y --fix-broken install || true
+            # Harmless try: finish any stuck aws kernel pkgs (if not present, no-op)
+            sudo apt-get install -y linux-aws-headers-6.8.0-1029 linux-aws-tools-6.8.0-1029 || true
+            sudo apt-get -y --fix-broken install || true
 
-      # Tools we rely on
-      if ! command -v curl >/dev/null 2>&1; then
-        sudo apt-get install -y curl
-      fi
+            # Tools we rely on
+            if ! command -v curl >/dev/null 2>&1; then
+              sudo apt-get install -y curl
+            fi
 
-      # --- Nginx install ---
-      if ! command -v nginx >/dev/null 2>&1; then
-        sudo apt-get install -y nginx
-        sudo systemctl enable nginx
-      fi
+            # --- Nginx install ---
+            if ! command -v nginx >/dev/null 2>&1; then
+              sudo apt-get install -y nginx
+              sudo systemctl enable nginx
+            fi
 
-      # --- SAFE WRITE: build config in /tmp then atomically move into place ---
-      cat > /tmp/${SITE_NAME}.nginx.conf <<CONF
-      server {
-        listen 80;
-        server_name ${DOMAIN};
+            # --- SAFE WRITE: build config in /tmp then atomically move into place ---
+            cat > /tmp/${SITE_NAME}.nginx.conf <<CONF
+            server {
+              listen 80;
+              server_name ${DOMAIN};
 
-        location / {
-          proxy_pass http://127.0.0.1:${PORT};
-          proxy_http_version 1.1;
-          proxy_set_header Upgrade \$http_upgrade;
-          proxy_set_header Connection "upgrade";
-          proxy_set_header Host \$host;
-          proxy_set_header X-Real-IP \$remote_addr;
-          proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-          proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-      }
-      CONF
+              location / {
+                proxy_pass http://127.0.0.1:${PORT};
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade \$http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+              }
+            }
+            CONF
 
-      # Put it in place
-      sudo mv /tmp/${SITE_NAME}.nginx.conf /etc/nginx/sites-available/${SITE_NAME}
-      sudo ln -sf /etc/nginx/sites-available/${SITE_NAME} /etc/nginx/sites-enabled/${SITE_NAME}
+            # Put it in place
+            sudo mv /tmp/${SITE_NAME}.nginx.conf /etc/nginx/sites-available/${SITE_NAME}
+            sudo ln -sf /etc/nginx/sites-available/${SITE_NAME} /etc/nginx/sites-enabled/${SITE_NAME}
 
-      # Just in case a previous bad line existed, strip any bogus "DRONE..." headers
-      sudo sed -i '1{/DRONE.*EXIT.*CODE/d}' /etc/nginx/sites-available/${SITE_NAME} || true
+            # Just in case a previous bad line existed, strip any bogus "DRONE..." headers
+            sudo sed -i '1{/DRONE.*EXIT.*CODE/d}' /etc/nginx/sites-available/${SITE_NAME} || true
 
-      # Test & reload
-      sudo nginx -t
-      sudo systemctl reload nginx
+            # Test & reload
+            sudo nginx -t
+            sudo systemctl reload nginx
 
-      # --- Optional: HTTPS with Certbot if a real domain is provided ---
-      if [[ "$DOMAIN" != "_" ]] && [[ -n "${CERTBOT_EMAIL:-}" ]]; then
-        if ! command -v certbot >/dev/null 2>&1; then
-          sudo apt-get install -y certbot python3-certbot-nginx
-        fi
-        sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --redirect || true
-      fi
+            # --- Optional: HTTPS with Certbot if a real domain is provided ---
+            if [[ "$DOMAIN" != "_" ]] && [[ -n "${CERTBOT_EMAIL:-}" ]]; then
+              if ! command -v certbot >/dev/null 2>&1; then
+                sudo apt-get install -y certbot python3-certbot-nginx
+              fi
+              sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --redirect || true
+            fi
 
-      echo "----- ACTIVE NGINX CONFIG (${SITE_NAME}) -----"
-      sudo sed -n '1,200p' /etc/nginx/sites-available/${SITE_NAME}
+            echo "----- ACTIVE NGINX CONFIG (${SITE_NAME}) -----"
+            sudo sed -n '1,200p' /etc/nginx/sites-available/${SITE_NAME}
 
-      # --- Health check (local) ---
-      # Use localhost so it works even if DNS hasn't propagated yet.
-      # If Certbot added HTTPS+redirects, follow them.
-      set +e
-      HTTP_CODE=$(curl -sS -o /dev/null -L -w "%{http_code}" http://127.0.0.1/)
-      set -e
-      echo "Health check HTTP code: ${HTTP_CODE}"
-      if [ "${HTTP_CODE}" -lt 200 ] || [ "${HTTP_CODE}" -ge 400 ]; then
-        echo "Health check failed."
-        exit 1
-      fi
+            # --- Health check (local) ---
+            set +e
+            HTTP_CODE=$(curl -sS -o /dev/null -L -w "%{http_code}" http://127.0.0.1/)
+            set -e
+            echo "Health check HTTP code: ${HTTP_CODE}"
+            if [ "${HTTP_CODE}" -lt 200 ] || [ "${HTTP_CODE}" -ge 400 ]; then
+              echo "Health check failed."
+              exit 1
+            fi
