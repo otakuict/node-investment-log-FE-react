@@ -14,7 +14,7 @@ jobs:
       - name: Configure Nginx (no install)
         uses: appleboy/ssh-action@v1.2.0
         env:
-          SERVER_NAME: ${{ secrets.SERVER_NAME }}       # example.com or "_" to skip TLS
+          SERVER_NAME: ${{ secrets.SERVER_NAME }}       
           APP_PORT: ${{ secrets.APP_PORT }}             # host port Nginx should proxy to
           CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}   # only if using HTTPS
           SITE_NAME: app
