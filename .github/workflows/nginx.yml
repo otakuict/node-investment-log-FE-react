@@ -1,0 +1,70 @@
+name: Nginx Operations
+
+on:
+  push:
+    branches: [ nginx-config ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Build your app here, then upload artifacts / docker image / etc.
+
+      - name: Configure Nginx on EC2 (install if missing)
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          SERVER_NAME: ${{ secrets.SERVER_NAME }}   # example.com or "_" to use IP
+          APP_PORT: ${{ secrets.APP_PORT }}         # e.g. 3000
+          EMAIL: ${{ secrets.CERTBOT_EMAIL }}       # e.g. you@example.com (for TLS)
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            DOMAIN="${SERVER_NAME:-_}"
+            PORT="${APP_PORT:-3000}"
+            SITE_NAME="app"
+
+            # Install nginx if not installed
+            if ! command -v nginx >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y nginx
+              sudo systemctl enable nginx
+            fi
+
+            # Write server block
+            sudo tee /etc/nginx/sites-available/$SITE_NAME >/dev/null <<CONF
+            server {
+              listen 80;
+              server_name ${DOMAIN};
+
+              location / {
+                proxy_pass http://127.0.0.1:${PORT};
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade \$http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+              }
+            }
+            CONF
+
+            # Enable and reload
+            sudo ln -sf /etc/nginx/sites-available/$SITE_NAME /etc/nginx/sites-enabled/$SITE_NAME
+            sudo nginx -t
+            sudo systemctl reload nginx
+
+            # Optional: auto-TLS when a real domain is provided
+            if [ "$DOMAIN" != "_" ] && [ -n "${EMAIL:-}" ]; then
+              if ! command -v certbot >/dev/null 2>&1; then
+                sudo apt-get install -y certbot python3-certbot-nginx
+              fi
+              sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect
+            fi
