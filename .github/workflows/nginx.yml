@@ -1,31 +1,72 @@
-- name: Fix APT and install Nginx
+- name: Fix APT, install & configure Nginx (idempotent)
   uses: appleboy/ssh-action@v1.2.0
+  env:
+    SERVER_NAME: ${{ secrets.SERVER_NAME }}     # e.g. example.com or "_" to skip TLS
+    APP_PORT: ${{ secrets.APP_PORT }}           # host port your app listens on (e.g. 3001 if Docker maps 3001->3000)
+    CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }} # email for Let's Encrypt (optional)
+    SITE_NAME: app                              # change if you like
   with:
     host: ${{ secrets.EC2_HOST }}
-    username: ${{ secrets.EC2_USER }}  # e.g., ubuntu, ec2-user
+    username: ${{ secrets.EC2_USER }}           # ubuntu, ec2-user, etc.
     key: ${{ secrets.EC2_SSH_KEY }}
     script_stop: true
     script: |
       set -euo pipefail
       export DEBIAN_FRONTEND=noninteractive
 
-      # Refresh indexes
-      sudo apt-get update -y
+      DOMAIN="${SERVER_NAME:-_}"
+      PORT="${APP_PORT:-3000}"
+      SITE_NAME="${SITE_NAME:-app}"
 
-      # Repair any half-installed packages
+      # --- APT health + install nginx ---
+      sudo apt-get update -y
       sudo dpkg --configure -a || true
       sudo apt-get -y -f install || true
       sudo apt-get -y --fix-broken install || true
-
-      # (Optional) finish pending AWS kernel headers/tools if they caused the block
+      # try finishing any stuck aws kernel packages (harmless if not present)
       sudo apt-get install -y linux-aws-headers-6.8.0-1029 linux-aws-tools-6.8.0-1029 || true
-
-      # Try again to fix any remaining broken deps
       sudo apt-get -y --fix-broken install || true
 
-      # Now install nginx cleanly
-      sudo apt-get install -y nginx
+      # Install nginx if missing
+      if ! command -v nginx >/dev/null 2>&1; then
+        sudo apt-get install -y nginx
+        sudo systemctl enable nginx
+      fi
 
-      # Enable & start (no-op if already running)
-      sudo systemctl enable nginx
-      sudo systemctl restart nginx
+      # --- Nginx server block (overwrite each deploy) ---
+      sudo tee /etc/nginx/sites-available/$SITE_NAME >/dev/null <<CONF
+      server {
+        listen 80;
+        server_name ${DOMAIN};
+
+        # If you run Docker mapping 0.0.0.0:3001->3000, set APP_PORT=3001
+        location / {
+          proxy_pass http://127.0.0.1:${PORT};
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade \$http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_set_header Host \$host;
+          proxy_set_header X-Real-IP \$remote_addr;
+          proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+      }
+      CONF
+
+      # Enable the site and reload
+      sudo ln -sf /etc/nginx/sites-available/$SITE_NAME /etc/nginx/sites-enabled/$SITE_NAME
+      sudo nginx -t
+      sudo systemctl reload nginx
+
+      # --- Optional: automatic HTTPS if a real domain is provided ---
+      if [[ "$DOMAIN" != "_" ]] && [[ -n "${CERTBOT_EMAIL:-}" ]]; then
+        if ! command -v certbot >/dev/null 2>&1; then
+          sudo apt-get install -y certbot python3-certbot-nginx
+        fi
+        # This adds TLS and a redirect, and sets up auto-renew
+        sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --redirect || true
+      fi
+
+      # Show the final active config in the logs (handy for debugging)
+      echo "----- ACTIVE NGINX CONFIG ($SITE_NAME) -----"
+      sudo cat /etc/nginx/sites-available/$SITE_NAME
